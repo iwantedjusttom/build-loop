@@ -61,8 +61,8 @@ Triggered when the routing above selects background fan-out. This is safe **beca
 
 1. **List + filter centrally.** `gh issue list --label ready`. Drop any issue whose body says `Depends on #N` where `#N` isn't merged yet. If Tom named specific issues, intersect with that. What survives is the **buildable batch**; report anything held back and why ("holding #7 — depends on #5, not merged").
 2. **Assign — don't let sub-agents self-pick.** Hand each sub-agent one specific issue number up front. Self-picking would race two agents onto the same issue; assigning removes the race.
-3. **Spawn one sub-agent per issue, each in its own git worktree.** Use the Agent tool with `isolation: 'worktree'` and `run_in_background: true`. **Worktrees are mandatory:** the features don't collide, but several agents running `git switch` in one working directory would corrupt each other's checkout — each needs its own. Give each sub-agent its issue number, the repo path, and the single-issue procedure ("The loop" below, steps 2–7: claim → branch → build to spec → comment the why → **prove it (quality-gate)** → open the PR → relabel `in-review`), then have it return.
-4. **Collect and report the batch.** As each finishes, surface its PR. Summarize: which issues → which PRs (now `in-review`), which were held and why. **Do not merge** — that's Tom's, in any order.
+3. **Spawn one sub-agent per issue, each in its own git worktree.** Use the Agent tool with `isolation: 'worktree'` and `run_in_background: true`. **Worktrees are mandatory:** the features don't collide, but several agents running `git switch` in one working directory would corrupt each other's checkout — each needs its own. Give each sub-agent its issue number, the repo path, and the single-issue procedure ("The loop" below, steps 2–7: claim → branch → build to spec → comment the why → **prove it (quality-gate)** → open the PR → **move to In Review — `in-review` label *and* board slide, verified per step 7(c)**), then have it return. Spell out that opening the PR is **not** the finish line — the verified move to In Review is.
+4. **Collect, sweep, and report the batch.** As each finishes, surface its PR. **Sweep for stranded cards:** for every issue that now has a PR, confirm it's actually in In Review — `gh issue view #N --json state,labels` shows `in-review` (not `building`) and the board reads **In Review**. Any sub-agent that opened a PR but left the issue in `building` missed step 7(c); finish the move for it yourself (relabel + board slide). Then summarize: which issues → which PRs (now `in-review`), which were held and why. **Do not merge** — that's Tom's, in any order.
 
 Each spawned sub-agent runs the normal single-issue loop on its assigned issue. The dispatcher only lists, filters, assigns, spawns, and reports.
 
@@ -71,26 +71,48 @@ Each spawned sub-agent runs the normal single-issue loop on its assigned issue. 
 For each unit of work:
 
 1. **Pick.** `gh issue list --label ready`. Take an issue whose **base is available** — `main` always is; an issue whose body says `Depends on #N` is buildable only once `#N` is **closed/merged**. If a `ready` issue's dependency isn't merged yet, skip it and try another. If nothing is buildable, say so and stop — don't invent work.
-2. **Claim it.** `gh issue edit #N --remove-label ready --add-label building`, then slide the card: `bash /c/Users/iwant/command-center/board-status.sh <repo> #N Building` (see *Slide the card* below).
+2. **Claim it.** `gh issue edit #N --remove-label ready --add-label building`, then slide the card: `bash /c/Users/iwant/.claude/skills/command-center/board-status.sh <repo> #N Building` (see *Slide the card* below).
 3. **Worktree + branch.** Spin up the feature's worktree off `main` — never touch the main checkout: `wt=$(bash /c/Users/iwant/.claude/skills/build-loop/worktree.sh new "<repo>" "feature/<#>-<slug>")` (or `fix/<#>-<slug>`). The helper **continues an existing branch** if one's already there (a branch belongs to a feature for its whole life) and otherwise **forks a fresh one off `main`** — you always cut from `main`: `Depends on #N` is a *wait-gate, not a parent*, so once `#N` is merged its code is in `main` and branching off `main` already includes it. Never stack onto another feature's branch. From here on, **`$wt` is your working directory** — write files under it and use `git -C "$wt" …` for every git command (foreground); a fan-out sub-agent gets the same isolation from `isolation: 'worktree'`.
 4. **Build to the spec.** Match the mockup and implement the schema design. **You write the migration file and assign its number** — the number depends on the order features land, a build-time fact the designer couldn't know. Honor the standing rules: **mobile-first is non-negotiable; RLS policies on every table; service role key server-side only.** (Read the repo's `CLAUDE.md` / `DESIGN.md` for project specifics.)
 5. **Record the *why* as you go.** Comment decisions and surprises on the issue — `gh issue comment #N --body "..."` — aimed at *why*, not keystroke narration ("scoped goals by period because the camp runs in weekends"; "hit an RLS recursion error on the teams policy, fixed by X"). The issue thread is your worklog, kept forever on GitHub.
 6. **Prove it — run the gate.** Before this build may advance, commit your work in the worktree (`git -C "$wt" commit …`, `feat:`/`fix:` prefixed) and hand it to the **`quality-gate`** skill — its own siloed skill — pointed at the feature's worktree/branch and the issue (the spec). In a **fresh, independent** context it writes spec-based tests, runs the app via `verify`, and runs `code-review` + the two-lens security pass (`security-review` + `vibe-security`) — returning **PASS / FAIL** with a short report you post as an issue comment so the proof is on the record. **Only a PASS may proceed to Finish.** On FAIL, fix the findings on the same branch in the worktree and re-run the gate — up to **two self-heal rounds**; if it still fails, **stop and surface it to Tom** with exactly what's failing (a stuck build is information, not a loop to grind). You never grade your own build — the gate does, which is the whole point of it being independent. (Background fan-out sub-agents run this step themselves before they open their PR.)
-7. **Finish.** *(Reached only on a gate PASS.)* From inside the worktree, push — `git -C "$wt" push -u origin feature/<#>-<slug>` — then open the PR that closes the issue: `gh pr create --title "..." --body "Closes #N — <what shipped>"`. Then `gh issue edit #N --remove-label building --add-label in-review` and slide the card: `bash /c/Users/iwant/command-center/board-status.sh <repo> #N "In Review"`. **Do not merge** — Tom reviews and merges on his own schedule, in any order. The worktree stays put until its PR merges, then gets torn down (see *Cleanup on merge*).
+7. **Finish — the move to In Review *is* the finish line, not the PR.** *(Reached only on a gate PASS.)* Three actions, in order, and the unit is **not done until step (c) is verified**:
+   - **(a) Push.** From inside the worktree: `git -C "$wt" push -u origin feature/<#>-<slug>`.
+   - **(b) Open the PR that closes the issue:** `gh pr create --title "..." --body "Closes #N — <what shipped>"`. The `Closes #N` is **mandatory** — it's what later moves the issue to Closed when Tom merges.
+   - **(c) Move it to In Review — both halves, always together.** The moment a PR exists the issue must leave `building`:
+     ```
+     gh issue edit #N --remove-label building --add-label in-review
+     bash /c/Users/iwant/.claude/skills/command-center/board-status.sh <repo> #N "In Review"
+     ```
+     Run **both** — the label *and* the board slide. One without the other leaves the card stranded.
+   - **(d) If the build added a DB migration, register it as its own `needs-migration` issue.** Applying the SQL to Supabase is a *separate manual step* on Tom's schedule — distinct from merging the PR — and is easy to lose. So whenever the build added a `db/migrations/*.sql` file, open a small tracking issue (one per migration file) Tom closes the moment he's run it:
+     ```
+     gh issue create --repo <owner>/<repo> --label needs-migration \
+       --title "Deploy: run migration <NNNN> — <slug> (SC-xxx)" \
+       --body "**Migration:** \`db/migrations/<NNNN>_<slug>.sql\`
+     **From:** #N · PR #<pr>
+     **Order:** <standalone, or 'after <NNNN-1>' if it depends on an earlier unapplied one>
+     **Apply:** Supabase SQL Editor → paste → Run (or the linked CLI). Additive & idempotent.
+
+     ➡️ **Close this issue once the SQL has been run against prod.** Open = not yet applied."
+     ```
+     Create the `needs-migration` label once per repo if it doesn't exist (`gh label create needs-migration --color C2E0C6 --description "A DB migration to run against Supabase; close once applied"`). Then **slide the new issue into the board's dedicated `Migrations` column** so Tom sees it there too: `bash /c/Users/iwant/.claude/skills/command-center/board-status.sh <repo> <new#> "Migrations"`. (The Mission Control Status field has a `Migrations` column — between `In Review` and `Closed` — for exactly this; when Tom closes the issue after running the SQL, GitHub's built-in "item closed → Closed" workflow moves it to `Closed`.) No migration in the build → skip this step.
+
+   **An open PR while the issue is still `building` is a bug** — opening the PR does not end the unit; this move does. **Verify before you report done:** `gh issue view #N --json state,labels` must show the issue **OPEN** with label `in-review` (not `building`), and the board card must read **In Review**. If either still says Building, the move was missed — redo (c) and re-check. **Do not merge, and do not close the issue** — Tom reviews and merges on his own schedule; the merge (via `Closes #N`) is what closes it. The worktree stays put until its PR merges, then gets torn down (see *Cleanup on merge*).
 8. **Loop or stop.** Foreground + many ("build them all here") → go back to step 1 for the next buildable issue. Foreground + one → stop and report what you built. (Background fan-out doesn't loop here — the dispatcher spawned a sub-agent per issue, and each runs steps 2–7 once and returns.)
 
 *Before the first PR on a repo, confirm GitHub is ready:* `gh auth status` (if it fails, Tom runs `gh auth login` — one-time, browser) and that an `origin` remote exists. If the project was never pushed, create it: `gh repo create <name> --private --source=. --remote=origin --push`. Private by default.
 
 ## Slide the card on the unified board
 
-Tom keeps a single cross-repo **Mission Control** board (account-level GitHub Project #1, `iwantedjusttom`) whose columns mirror the labels: `Idea → Ready → Building → In Review → Closed`. When you change a label, also slide the card so the board stays live:
+Tom keeps a single cross-repo **Mission Control** board (account-level GitHub Project #1, `iwantedjusttom`) whose columns mirror the labels: `Idea → Ready → Building → In Review → Migrations → Closed` (the `Migrations` column is the side-lane for `needs-migration` deploy issues — see Finish step (d)). When you change a label, also slide the card so the board stays live:
 
 ```
-bash /c/Users/iwant/command-center/board-status.sh <repo> <#> "<Column>"
+bash /c/Users/iwant/.claude/skills/command-center/board-status.sh <repo> <#> "<Column>"
 ```
 
 - It auto-adds the issue/PR to the board if it isn't on it yet, then sets the Status — idempotent, and it resolves IDs by name so a renamed column won't break it.
-- You only set the two **label-driven** middle states: `Building` (step 2) and `In Review` (step 6). The `Closed` column is handled automatically by the board's built-in "item closed → Closed" workflow when the PR merges — you don't set it.
+- You only set the two **label-driven** middle states: `Building` (step 2) and `In Review` (step 7c). Both are two-part moves — label **and** board slide, always together. The `Closed` column is handled automatically by the board's built-in "item closed → Closed" workflow when the PR merges — you don't set it (and you never close the issue yourself).
 - This is the *only* board bookkeeping in the loop; don't add more. (Designer sets `Idea`/`Ready`; see design-queue.)
 
 ## No stacking — branch off main, merge in any order
