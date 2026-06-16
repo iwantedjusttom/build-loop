@@ -53,6 +53,19 @@ Two independent questions, **both read straight from Tom's words** — never ask
 
 When in doubt on scope, build one; when in doubt on mode, foreground. The only thing you *report rather than ask* is buildability — e.g. "building 2, holding 2 because their deps aren't merged" is information, not a permission question.
 
+## Model — ask which engine builds it
+
+Before any build work starts — foreground or fan-out — settle **which model runs the build**. It's a real cost/capability tradeoff (Sonnet is much cheaper and great for well-specced builds; Opus is worth its price on harder or ambiguous ones), and the silent default is to inherit the session model — usually Opus.
+
+- **If Tom named a model** ("build #155 on Sonnet", "use Opus") → use it, don't ask.
+- **Otherwise ask once, up front:** *"Which model should I build #N on — Sonnet (cheaper, fine for a well-specced build) or Opus (for harder/ambiguous work)?"* One question, then proceed. (Skip the ask only if Tom already gave a standing default this session.)
+
+Then **actually apply the choice — a verbal request alone does NOT change a sub-agent's model:**
+- **Sub-agent spawns (fan-out, or a foreground sub-agent):** pass it explicitly to the Agent tool — `model: 'sonnet'` (or `'opus'`). Without this, the spawn inherits the session model and you get Opus regardless of what was asked.
+- **Foreground in this window:** the in-window agent can't switch its own model mid-session. So if Tom's choice differs from the current session model, either he runs `/model <choice>` first, **or** you run the build as a *foreground sub-agent* (Agent tool, not backgrounded) with `model:` set so the choice takes effect — confirm which he prefers.
+
+This is the fix for "I said Sonnet but it built on Opus": the model must be set at spawn (or via `/model`), not merely mentioned.
+
 ## Fan-out — building many in parallel as background sub-agents
 
 Triggered when the routing above selects background fan-out. This is safe **because of the no-stacking rule**: every feature branches off `main`, and the designer already pulled any genuine shared-code change into a foundation-first issue, so the features can't step on each other. Fan-out just cashes in that guarantee — it doesn't add risk.
@@ -61,7 +74,7 @@ Triggered when the routing above selects background fan-out. This is safe **beca
 
 1. **List + filter centrally.** `gh issue list --label ready`. Drop any issue whose body says `Depends on #N` where `#N` isn't merged yet. If Tom named specific issues, intersect with that. What survives is the **buildable batch**; report anything held back and why ("holding #7 — depends on #5, not merged").
 2. **Assign — don't let sub-agents self-pick.** Hand each sub-agent one specific issue number up front. Self-picking would race two agents onto the same issue; assigning removes the race.
-3. **Spawn one sub-agent per issue, each in its own git worktree.** Use the Agent tool with `isolation: 'worktree'` and `run_in_background: true`. **Worktrees are mandatory:** the features don't collide, but several agents running `git switch` in one working directory would corrupt each other's checkout — each needs its own. Give each sub-agent its issue number, the repo path, and the single-issue procedure ("The loop" below, steps 2–7: ensure on table → branch → build to spec → comment the why → **prove it (quality-gate)** → open the PR → **add the PR to the table (`board-status.sh`, add-only)**), then have it return. The finish line is the open PR sitting on the table; **never move a card between columns** — Tom does that.
+3. **Spawn one sub-agent per issue, each in its own git worktree.** Use the Agent tool with `isolation: 'worktree'`, `run_in_background: true`, and **`model:` set to the engine Tom chose** (see *Model — ask which engine builds it* above — omitting it silently defaults the sub-agent to the session's model). **Worktrees are mandatory:** the features don't collide, but several agents running `git switch` in one working directory would corrupt each other's checkout — each needs its own. Give each sub-agent its issue number, the repo path, and the single-issue procedure ("The loop" below, steps 2–7: ensure on table → branch → build to spec → comment the why → **prove it (quality-gate)** → open the PR → **add the PR to the table (`board-status.sh`, add-only)**), then have it return. The finish line is the open PR sitting on the table; **never move a card between columns** — Tom does that.
 4. **Collect, sweep, and report the batch.** As each finishes, surface its PR. **Sweep for stranded items:** for every issue that now has a PR, confirm the PR actually landed on the table (`bash /c/Users/iwant/.claude/skills/board-mechanic/board-status.sh <repo> <pr#>` is idempotent — re-run it to be sure nothing's missing). Then summarize: which issues → which PRs, which were held and why. **Don't move cards between columns and don't merge** — both are Tom's, in any order.
 
 Each spawned sub-agent runs the normal single-issue loop on its assigned issue. The dispatcher only lists, filters, assigns, spawns, and reports.
