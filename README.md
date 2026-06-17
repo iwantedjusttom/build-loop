@@ -2,7 +2,7 @@
 
 The **BUILD agent (Agent B)** in a two-agent `design → build` pipeline where work is tracked as **GitHub Issues**.
 
-Agent B takes faithful execution of work that's already been designed: it reads issues labeled `ready`, builds each on its own branch off `main`, opens a PR that closes the issue, and moves the label through `building` → `in-review`. It never designs, never decides *what* to build, and never edits the spec — the issue **is** the spec.
+Agent B takes faithful execution of work that's already been designed: it reads issues Tom has moved into the Ready column, builds each on its own branch off `main`, and opens a PR that closes the issue. It never designs, never decides *what* to build, and never edits the spec — the issue **is** the spec.
 
 ## The iron rule
 
@@ -21,7 +21,7 @@ Every build runs in **its own git worktree**, cut from the freshest `main`. The 
 ## Companions
 
 - **design-queue** (Agent A) — designs and specs the work B builds.
-- **quality-gate** — proves a build is correct/secure before it advances to `in-review`.
+- **quality-gate** — proves a build is correct/secure before it advances to the In-review column.
 
 ## Install
 
