@@ -9,7 +9,7 @@ You are the **builder**. Tom and the design agent have already settled *what* to
 
 ## The iron rule: every build runs in its own worktree
 
-**Every feature build happens in its own git worktree, cut off the freshest `main` — foreground or background, this window or a spawned sub-agent, no exceptions.** The repo's **main checkout stays parked on `main`, always**: it belongs to the designer (design-queue reads current code and commits mockups there while you build). You never `git switch` the main checkout onto a feature branch — that's the one thing that makes design and build collide, and the worktree rule exists to make it impossible.
+**Every feature build happens in its own git worktree, cut off the freshest `main` — foreground or background, this window or a spawned sub-agent, no exceptions.** The repo's **main checkout stays parked on `main`, always, and nobody works inside it**: the designer reads current code from it but now lands mockups through its *own* worktree + a self-merged PR (see design-queue), so not even design commits in the main checkout. You never `git switch` the main checkout onto a feature branch — that's the one thing that makes design and build collide, and the worktree rule exists to make it impossible.
 
 Worktrees share the repo's history but have independent working directories, so any number of builds — plus the designer on `main` — coexist with zero branch contention. A worktree off `main` is forked at build time from the *current* tip, so it starts fresh; the branch is the perishable part, created as late as possible.
 
@@ -19,7 +19,7 @@ Worktrees share the repo's history but have independent working directories, so 
   # then operate inside $wt — write files under $wt, and use git -C "$wt" ... for every git call
   ```
   The helper forks off `origin/main` (or local `main`), continues an existing branch if one's already there, and seeds gitignored local config (`.env*`, `node_modules`). It prints the worktree path on stdout.
-- **Background fan-out:** each sub-agent already gets its own worktree via the Agent tool's `isolation: 'worktree'` — that satisfies the rule automatically; the helper is for the **foreground path only**. **A sub-agent running under `isolation: 'worktree'` must never also call `worktree.sh new`** — it is *already* in a worktree, and creating a second one nests a stray worktree + branch that breaks `gh pr merge --delete-branch` teardown on every merge (this happened on a whole run). Inside an isolated sub-agent, just create the branch in place: `git switch -c feature/<#>-<slug>`.
+- **Background fan-out:** each sub-agent already gets its own worktree via the Agent tool's `isolation: 'worktree'` — that satisfies the rule automatically; the helper is for the **foreground path only**. **A sub-agent running under `isolation: 'worktree'` must never also call `worktree.sh new`** — it is *already* in a worktree, and creating a second one nests a stray worktree + branch that breaks `gh pr merge --delete-branch` teardown on every merge (this happened on a whole run). Inside an isolated sub-agent, just create the branch in place. **The isolation worktree starts on a harness-default branch named `worktree-agent-<id>`, so before ANY commit the sub-agent's *first* action must be `git switch -c feature/<#>-<slug>`, and its PR must be opened from that branch** — skip this and the commits and PR land on the ugly `worktree-agent-<id>` branch instead (we've found stray `worktree-agent-*` branches sitting on merged work — that's this step being missed).
 - **On merge, tear it down** (worktrees and branches are disposable — see *Cleanup on merge*):
   ```
   bash /c/Users/iwant/.claude/skills/build-loop/worktree.sh done "<repo>" "feature/<#>-<slug>"
@@ -159,7 +159,9 @@ A worktree and its branch are **disposable** — they exist only while the featu
 bash /c/Users/iwant/.claude/skills/build-loop/worktree.sh done "<repo>" "feature/<#>-<slug>"
 ```
 
-This removes the worktree under `~/.worktrees/<repo>/` and deletes the local branch. Do it when you see a PR has merged (or when Tom says so) — and `worktree.sh new` always forks the *next* feature off the freshest `origin/main`, so even if local `main` wasn't pulled, new worktrees start current. Background fan-out sub-agents in `isolation: 'worktree'` are auto-cleaned by the harness, so this step is for the foreground worktrees you create.
+This removes the worktree under `~/.worktrees/<repo>/` and deletes the local branch. Do it when you see a PR has merged (or when Tom says so) — and `worktree.sh new` always forks the *next* feature off the freshest `origin/main`, so even if local `main` wasn't pulled, new worktrees start current.
+
+**Don't trust the harness to auto-clean fan-out worktrees — it doesn't.** The Agent tool only auto-removes an `isolation: 'worktree'` worktree if it's *unchanged*; a build commits into it, so it stays behind as `<repo>/.claude/worktrees/agent-*` along with its branch. Tom merges most PRs async on GitHub with no agent present to run teardown, so those — plus any foreground worktree you didn't personally tear down — accumulate. They're reclaimed by **repo-janitor** (Tom runs `/repo-janitor` to sweep merged branches + stale worktrees across every repo; it's report-then-confirm and never touches unmerged work). Tear down what you can at merge time; the janitor is the manual backstop for everything that merged while no agent was watching.
 
 ## When two features collide at merge
 
