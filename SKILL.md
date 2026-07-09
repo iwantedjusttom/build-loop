@@ -66,6 +66,18 @@ Then **actually apply the choice — a verbal request alone does NOT change a su
 
 This is the fix for "I said Sonnet but it built on Opus": the model must be set at spawn (or via `/model`), not merely mentioned.
 
+## Which repo — resolve it, don't ask
+
+Every script above needs the repo, but this skill only ever writes `<repo>` as a placeholder — so **work it out yourself and ask only as a last resort.** Go down this ladder and stop at the first rung that answers:
+
+1. **Tom named it** ("build #14 in samcamp", "the academy repo") → use that.
+2. **You're already inside a project's git tree** → read it from there: `git -C <cwd> remote get-url origin`. (Running from `~` or another non-repo folder just skips this rung — it's not a reason to ask yet.)
+3. **The issue points to it** — a Ready issue lives in exactly one repo; whichever repo you're pulling the issue from *is* the repo.
+4. **Only one project is live** → use it.
+5. **Genuinely ambiguous** — home folder, nothing named, several live repos — *then* ask, and list the candidates so it's one tap for Tom.
+
+Two shapes of the same answer: `worktree.sh` wants the repo's **local path** (it derives the name via `basename`), while `board-status.sh` and `gh --repo` want the bare **GitHub repo name**. Resolve the local path once and both fall out of it.
+
 ## Fan-out — building many in parallel as background sub-agents
 
 Triggered when the routing above selects background fan-out. This is safe **because of the no-stacking rule**: every feature branches off `main`, and the designer already pulled any genuine shared-code change into a foundation-first issue, so the features can't step on each other. Fan-out just cashes in that guarantee — it doesn't add risk.
